@@ -5,6 +5,7 @@ import { initCommand } from './commands/init';
 import { genCommand } from './commands/gen';
 import { testCommand } from './commands/test';
 import { coverageCommand } from './commands/coverage';
+import { shellCommand } from './commands/shell';
 
 const program = new Command();
 
@@ -18,6 +19,7 @@ initCommand(program);
 genCommand(program);
 testCommand(program);
 coverageCommand(program);
+shellCommand(program);
 
 program.parse();
 

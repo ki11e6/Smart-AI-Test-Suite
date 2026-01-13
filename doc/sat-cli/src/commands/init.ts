@@ -1,7 +1,16 @@
 import { Command } from 'commander';
 import * as fs from 'fs-extra';
 import * as path from 'path';
-import chalk from 'chalk';
+
+import {
+  satSuccess,
+  satInfo,
+  satWarn,
+  satError,
+  satDim
+} from '../ui/logger';
+
+import { startShell } from './shell';
 
 export function initCommand(program: Command) {
   program
@@ -9,29 +18,33 @@ export function initCommand(program: Command) {
     .description('Initialize SAT in the current project')
     .action(async () => {
       try {
-        const configPath = path.join(process.cwd(), '.satrc');
-        const packageJsonPath = path.join(process.cwd(), 'package.json');
+        const projectRoot = process.cwd();
+        const configPath = path.join(projectRoot, '.satrc');
+        const packageJsonPath = path.join(projectRoot, 'package.json');
 
-        // Check if already initialized
+        // 🔹 Already initialized
         if (await fs.pathExists(configPath)) {
-          console.log(chalk.yellow('SAT is already initialized in this project.'));
+          satWarn('SAT is already initialized in this project');
+          satDim('Entering interactive mode...\n');
+          startShell();
           return;
         }
 
-        // Detect test framework
+        // 🔹 Detect test framework
         let framework = 'jest';
+
         if (await fs.pathExists(packageJsonPath)) {
           const packageJson = await fs.readJson(packageJsonPath);
-          const deps = { ...packageJson.dependencies, ...packageJson.devDependencies };
-          
-          if (deps.vitest) {
-            framework = 'vitest';
-          } else if (deps.mocha) {
-            framework = 'mocha';
-          }
+          const deps = {
+            ...packageJson.dependencies,
+            ...packageJson.devDependencies
+          };
+
+          if (deps.vitest) framework = 'vitest';
+          else if (deps.mocha) framework = 'mocha';
         }
 
-        // Create config
+        // 🔹 Create SAT config
         const config = {
           framework,
           testDir: '__tests__',
@@ -40,14 +53,20 @@ export function initCommand(program: Command) {
 
         await fs.writeJson(configPath, config, { spaces: 2 });
 
-        console.log(chalk.green('✓ SAT initialized successfully!'));
-        console.log(chalk.cyan(`  Framework: ${framework}`));
-        console.log(chalk.cyan(`  Test directory: ${config.testDir}`));
-        console.log(chalk.gray('\n  Run `sat gen unit <file>` to generate your first test.'));
+        // 🔹 Success output
+        satSuccess('SAT initialized successfully');
+        satInfo(`Framework       : ${framework}`);
+        satInfo(`Test directory  : ${config.testDir}`);
+        satDim('Configuration written to .satrc\n');
+
+        satDim('Entering SAT interactive mode...\n');
+
+        // 🔥 Auto-enter interactive session
+        startShell();
       } catch (error) {
-        console.error(chalk.red('Error initializing SAT:'), error);
+        satError('Failed to initialize SAT');
+        console.error(error);
         process.exit(1);
       }
     });
 }
-
