@@ -1,6 +1,6 @@
 {
   "name": "smart-ai-test-suite",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Unified CLI tool for automated test generation and execution",
   "main": "dist/index.js",
   "bin": {
