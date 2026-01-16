@@ -1,5 +1,15 @@
 #!/usr/bin/env node
 
+// Load environment variables first
+import dotenv from 'dotenv';
+import path from 'path';
+
+// Load .env from the CLI tool's directory
+dotenv.config({ path: path.join(__dirname, '../.env') });
+
+// Also try to load from current working directory
+dotenv.config();
+
 import { Command } from 'commander';
 import { initCommand } from './commands/init';
 import { genCommand } from './commands/gen';
@@ -11,8 +21,8 @@ const program = new Command();
 
 program
   .name('sat')
-  .description('Smart AI Test Suite - Automated test generation and execution')
-  .version('0.1.0');
+  .description('Smart AI Test Suite - AI-powered automated test generation')
+  .version('0.2.0');
 
 // Register commands
 initCommand(program);

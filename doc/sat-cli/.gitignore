@@ -2,7 +2,14 @@ node_modules/
 dist/
 *.log
 .DS_Store
-.satrc
 coverage/
 .nyc_output/
+
+# SAT Configuration (may contain API keys)
+.satrc
+.sat/
+
+# Environment variables
+.env
+.env.local
 
