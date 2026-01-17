@@ -109,6 +109,14 @@ export async function startShell() {
           await handleFix(args.join(' '));
           break;
 
+        case 'test':
+          await handleTest(args);
+          break;
+
+        case 'coverage':
+          await handleCoverage();
+          break;
+
         case 'status':
           await handleStatus();
           break;
@@ -164,6 +172,13 @@ ${chalk.cyan.bold('━━━ SAT Commands ━━━')}
   ${chalk.magenta.bold('fix')} ${chalk.blue('<file>')}
     ${chalk.gray('Auto-fix failing tests using AI')}
 
+  ${chalk.magenta.bold('test')} ${chalk.blue('[options]')}
+    ${chalk.gray('Run tests using configured framework')}
+    ${chalk.gray('Options: --watch, <file-pattern>')}
+
+  ${chalk.magenta.bold('coverage')}
+    ${chalk.gray('Generate and display test coverage report')}
+
   ${chalk.magenta.bold('status')}
     ${chalk.gray('Show current project context and configuration')}
 
@@ -178,10 +193,11 @@ ${chalk.cyan.bold('━━━ SAT Commands ━━━')}
 
 ${chalk.cyan.bold('━━━ Workflow ━━━')}
 
-  ${chalk.gray('1.')} ${chalk.white('sat shell')}       ${chalk.gray('→ Start interactive mode')}
-  ${chalk.gray('2.')} ${chalk.white('learn')}           ${chalk.gray('→ Analyze your project')}
-  ${chalk.gray('3.')} ${chalk.white('generate <file>')} ${chalk.gray('→ Create AI-powered tests')}
-  ${chalk.gray('4.')} ${chalk.white('exit')}            ${chalk.gray('→ Run tests with: sat test')}
+  ${chalk.gray('1.')} ${chalk.white('learn')}           ${chalk.gray('→ Analyze your project')}
+  ${chalk.gray('2.')} ${chalk.white('generate <file>')} ${chalk.gray('→ Create AI-powered tests')}
+  ${chalk.gray('3.')} ${chalk.white('test')}            ${chalk.gray('→ Run tests')}
+  ${chalk.gray('4.')} ${chalk.white('review <file>')}   ${chalk.gray('→ Check test quality')}
+  ${chalk.gray('5.')} ${chalk.white('fix <file>')}      ${chalk.gray('→ Auto-fix failing tests')}
 `);
 }
 
@@ -798,11 +814,140 @@ async function handleFix(filePath: string): Promise<void> {
     spinner.succeed(`Fixed: ${chalk.cyan(filePath)}`);
     satDim(`   Backup saved to: ${path.basename(backupPath)}`);
     console.log('');
-    satInfo(`Run ${chalk.magenta('sat test')} to verify the fix`);
+    satInfo(`Run ${chalk.magenta('test')} to verify the fix`);
 
   } catch (error: any) {
     spinner.fail('Fix failed');
     throw error;
+  }
+}
+
+/**
+ * Handle test command - run tests
+ */
+async function handleTest(args: string[]): Promise<void> {
+  const configPath = path.join(process.cwd(), '.satrc');
+
+  try {
+    if (!await fs.pathExists(configPath)) {
+      satWarn('SAT not initialized');
+      satInfo(`Run ${chalk.magenta('sat init')} first to initialize your project`);
+      return;
+    }
+
+    const config = await fs.readJson(configPath);
+    const framework = config.framework || 'jest';
+
+    // Check for watch mode or file pattern
+    const watchMode = args.includes('--watch') || args.includes('-w');
+    const filePattern = args.filter(a => !a.startsWith('-')).join(' ');
+
+    // Build command
+    let command = '';
+    if (framework === 'jest') {
+      command = 'npx jest';
+      if (watchMode) command += ' --watch';
+      if (filePattern) command += ` "${filePattern}"`;
+    } else if (framework === 'vitest') {
+      command = watchMode ? 'npx vitest --watch' : 'npx vitest run';
+      if (filePattern) command += ` "${filePattern}"`;
+    } else if (framework === 'mocha') {
+      command = 'npx mocha';
+      if (filePattern) command += ` "${filePattern}"`;
+    } else {
+      satError(`Unsupported framework: ${framework}`);
+      return;
+    }
+
+    satInfo(`Running tests with ${chalk.cyan(framework)}...`);
+    if (watchMode) {
+      satDim('Watch mode enabled. Press Ctrl+C to exit.');
+    }
+    console.log('');
+
+    // Use spawn for streaming output
+    const { spawn } = await import('child_process');
+    const child = spawn(command, [], {
+      shell: true,
+      cwd: process.cwd(),
+      stdio: 'inherit'
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      child.on('close', (code) => {
+        if (code === 0) {
+          console.log('');
+          satSuccess('Tests completed');
+        } else {
+          console.log('');
+          satWarn(`Tests finished with exit code ${code}`);
+        }
+        resolve();
+      });
+      child.on('error', reject);
+    });
+
+  } catch (error: any) {
+    satError(`Test execution failed: ${error.message}`);
+  }
+}
+
+/**
+ * Handle coverage command - run coverage report
+ */
+async function handleCoverage(): Promise<void> {
+  const configPath = path.join(process.cwd(), '.satrc');
+
+  try {
+    if (!await fs.pathExists(configPath)) {
+      satWarn('SAT not initialized');
+      satInfo(`Run ${chalk.magenta('sat init')} first to initialize your project`);
+      return;
+    }
+
+    const config = await fs.readJson(configPath);
+    const framework = config.framework || 'jest';
+
+    // Build coverage command
+    let command = '';
+    if (framework === 'jest') {
+      command = 'npx jest --coverage';
+    } else if (framework === 'vitest') {
+      command = 'npx vitest run --coverage';
+    } else if (framework === 'mocha') {
+      command = 'npx nyc --reporter=text mocha';
+    } else {
+      satError(`Unsupported framework: ${framework}`);
+      return;
+    }
+
+    satInfo(`Generating coverage report with ${chalk.cyan(framework)}...`);
+    console.log('');
+
+    // Use spawn for streaming output
+    const { spawn } = await import('child_process');
+    const child = spawn(command, [], {
+      shell: true,
+      cwd: process.cwd(),
+      stdio: 'inherit'
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      child.on('close', (code) => {
+        if (code === 0) {
+          console.log('');
+          satSuccess('Coverage report generated');
+        } else {
+          console.log('');
+          satWarn(`Coverage finished with exit code ${code}`);
+        }
+        resolve();
+      });
+      child.on('error', reject);
+    });
+
+  } catch (error: any) {
+    satError(`Coverage generation failed: ${error.message}`);
   }
 }
 
