@@ -38,68 +38,92 @@ export async function analyzeCode(filePath: string): Promise<CodeAnalysis | null
     const functions: FunctionInfo[] = [];
     const classes: Array<{ name: string; methods: FunctionInfo[] }> = [];
 
-    // Simple AST traversal to find functions and classes
-    function traverse(node: any) {
-      if (!node) return;
+    // Helper to extract function info
+    function extractFunctionInfo(node: any, isExported: boolean): FunctionInfo | null {
+      if (!node.id?.name) return null;
+      return {
+        name: node.id.name,
+        parameters: node.params.map((p: any) => {
+          if (p.type === 'Identifier') return p.name;
+          if (p.type === 'AssignmentPattern' && p.left?.name) return p.left.name;
+          return 'param';
+        }),
+        returnType: node.returnType?.typeAnnotation?.typeName?.name,
+        isExported
+      };
+    }
 
-      // Function declarations
-      if (node.type === 'FunctionDeclaration' && node.id) {
-        const isExported = node.parent?.type === 'ExportNamedDeclaration' || 
-                          node.parent?.type === 'ExportDefaultDeclaration';
-        
-        functions.push({
-          name: node.id.name,
-          parameters: node.params.map((p: any) => {
-            if (p.type === 'Identifier') return p.name;
-            if (p.type === 'AssignmentPattern' && p.left) return p.left.name;
-            return 'param';
-          }),
-          returnType: node.returnType?.typeAnnotation?.typeName?.name,
-          isExported
-        });
-      }
+    // Helper to extract class info
+    function extractClassInfo(node: any, isExported: boolean) {
+      if (!node.id?.name) return null;
+      const methods: FunctionInfo[] = [];
 
-      // Arrow functions and function expressions (exported)
-      if ((node.type === 'VariableDeclarator' || node.type === 'ExportNamedDeclaration') && 
-          node.init?.type === 'ArrowFunctionExpression') {
-        const isExported = node.type === 'ExportNamedDeclaration' || 
-                          node.parent?.type === 'ExportNamedDeclaration';
-        
-        if (node.id?.name) {
-          functions.push({
-            name: node.id.name,
-            parameters: node.init.params.map((p: any) => {
+      node.body.body.forEach((member: any) => {
+        if (member.type === 'MethodDefinition' && member.key?.name) {
+          methods.push({
+            name: member.key.name,
+            parameters: member.value.params.map((p: any) => {
               if (p.type === 'Identifier') return p.name;
               return 'param';
             }),
             isExported
           });
         }
+      });
+
+      return { name: node.id.name, methods };
+    }
+
+    // AST traversal with parent tracking
+    function traverse(node: any, isInsideExport: boolean = false) {
+      if (!node) return;
+
+      // Handle export declarations - mark children as exported
+      if (node.type === 'ExportNamedDeclaration' || node.type === 'ExportDefaultDeclaration') {
+        // Process the declaration inside the export
+        if (node.declaration) {
+          traverse(node.declaration, true);
+        }
+        // Process export specifiers (e.g., export { foo, bar })
+        if (node.specifiers) {
+          // These reference already-declared items, handled separately
+        }
+        return; // Don't traverse children again
+      }
+
+      // Function declarations
+      if (node.type === 'FunctionDeclaration') {
+        const funcInfo = extractFunctionInfo(node, isInsideExport);
+        if (funcInfo) {
+          functions.push(funcInfo);
+        }
+      }
+
+      // Variable declarations with arrow functions or function expressions
+      if (node.type === 'VariableDeclaration') {
+        node.declarations.forEach((decl: any) => {
+          if (decl.init?.type === 'ArrowFunctionExpression' ||
+              decl.init?.type === 'FunctionExpression') {
+            if (decl.id?.name) {
+              functions.push({
+                name: decl.id.name,
+                parameters: decl.init.params.map((p: any) => {
+                  if (p.type === 'Identifier') return p.name;
+                  return 'param';
+                }),
+                isExported: isInsideExport
+              });
+            }
+          }
+        });
       }
 
       // Class declarations
-      if (node.type === 'ClassDeclaration' && node.id) {
-        const methods: FunctionInfo[] = [];
-        const isExported = node.parent?.type === 'ExportNamedDeclaration' || 
-                          node.parent?.type === 'ExportDefaultDeclaration';
-
-        node.body.body.forEach((member: any) => {
-          if (member.type === 'MethodDefinition' && member.key) {
-            methods.push({
-              name: member.key.name,
-              parameters: member.value.params.map((p: any) => {
-                if (p.type === 'Identifier') return p.name;
-                return 'param';
-              }),
-              isExported
-            });
-          }
-        });
-
-        classes.push({
-          name: node.id.name,
-          methods
-        });
+      if (node.type === 'ClassDeclaration') {
+        const classInfo = extractClassInfo(node, isInsideExport);
+        if (classInfo) {
+          classes.push(classInfo);
+        }
       }
 
       // Recursively traverse children
@@ -107,9 +131,9 @@ export async function analyzeCode(filePath: string): Promise<CodeAnalysis | null
         if (key === 'parent' || key === 'range' || key === 'loc') continue;
         const child = node[key];
         if (Array.isArray(child)) {
-          child.forEach(traverse);
+          child.forEach(c => traverse(c, false));
         } else if (child && typeof child === 'object' && child.type) {
-          traverse(child);
+          traverse(child, false);
         }
       }
     }
