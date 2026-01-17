@@ -85,31 +85,29 @@ function generateTestContent(
   const importPath = calculateImportPath(sourceFilePath, testFilePath);
   const frameworkImports = getFrameworkImports(framework);
   
-  let imports = '';
   let testCases = '';
 
-  // Generate imports and tests for exported functions
+  // Collect all export names for the import statement
+  const exportNames: string[] = [];
+
+  // Generate tests for exported functions
   const exportedFunctions = analysis.functions.filter(f => f.isExported);
-  
-  if (exportedFunctions.length > 0) {
-    const functionNames = exportedFunctions.map(f => f.name).join(', ');
-    imports = `import { ${functionNames} } from '${importPath}';`;
-    
-    exportedFunctions.forEach(func => {
-      testCases += generateFunctionTests(func);
-    });
-  }
+  exportedFunctions.forEach(func => {
+    exportNames.push(func.name);
+    testCases += generateFunctionTests(func);
+  });
 
   // Generate tests for classes
   analysis.classes.forEach(cls => {
-    if (!imports) {
-      imports = `import { ${cls.name} } from '${importPath}';`;
-    } else {
-      imports = imports.replace('}', `, ${cls.name} }`);
-    }
-    
+    exportNames.push(cls.name);
     testCases += generateClassTests(cls);
   });
+
+  // Build imports string from collected export names
+  let imports = '';
+  if (exportNames.length > 0) {
+    imports = `import { ${exportNames.join(', ')} } from '${importPath}';`;
+  }
 
   // Default if no exports found
   if (!imports) {

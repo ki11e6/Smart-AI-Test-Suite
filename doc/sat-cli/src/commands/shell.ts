@@ -25,8 +25,29 @@ import {
 } from '../core/project-scanner';
 import { analyzeCode } from '../core/analyzer';
 
-// In-memory project context
+// In-memory project context (session-scoped cache)
 let projectContext: ProjectContext | null = null;
+
+// Command execution lock to prevent overlapping async operations
+let isCommandRunning = false;
+
+/**
+ * Get the current project context, loading from disk if not in memory
+ */
+async function getProjectContext(): Promise<ProjectContext | null> {
+  if (!projectContext) {
+    projectContext = await loadProjectContext(process.cwd());
+  }
+  return projectContext;
+}
+
+/**
+ * Update the project context (both in memory and on disk)
+ */
+async function setProjectContext(context: ProjectContext): Promise<void> {
+  projectContext = context;
+  await saveProjectContext(process.cwd(), context);
+}
 
 export function shellCommand(program: any) {
   program
@@ -71,6 +92,21 @@ export async function startShell() {
     if (!input) {
       rl.prompt();
       return;
+    }
+
+    // Prevent overlapping async operations
+    if (isCommandRunning) {
+      satWarn('A command is already running. Please wait...');
+      rl.prompt();
+      return;
+    }
+
+    // Synchronous commands that don't need the lock
+    const syncCommands = ['exit', 'quit', 'help', 'clear'];
+    const needsLock = !syncCommands.includes(command.toLowerCase());
+
+    if (needsLock) {
+      isCommandRunning = true;
     }
 
     try {
@@ -134,6 +170,11 @@ export async function startShell() {
       satError(error.message || 'An error occurred');
       if (process.env.DEBUG) {
         console.error(error);
+      }
+    } finally {
+      // Release the command execution lock
+      if (needsLock) {
+        isCommandRunning = false;
       }
     }
 
@@ -356,13 +397,11 @@ async function handleGenerate(args: string): Promise<void> {
   }
 
   // Load context if not in memory
-  if (!projectContext) {
-    projectContext = await loadProjectContext(process.cwd());
-    if (!projectContext) {
-      satWarn('Project not learned yet');
-      satInfo(`Run ${chalk.magenta('learn')} first to analyze your project`);
-      return;
-    }
+  const context = await getProjectContext();
+  if (!context) {
+    satWarn('Project not learned yet');
+    satInfo(`Run ${chalk.magenta('learn')} first to analyze your project`);
+    return;
   }
 
   if (args === '--all') {
@@ -631,30 +670,48 @@ async function handleSuggest(filePath: string): Promise<void> {
     spinner.succeed('Analysis complete');
 
     if (suggestions.parseError) {
+      satWarn('Could not parse AI response:');
       console.log('\n' + suggestions.raw);
-    } else {
-      console.log('');
+      return;
+    }
+
+    console.log('');
+
+    const hasMissingTests = suggestions.missingTests && suggestions.missingTests.length > 0;
+    const hasCriticalGaps = suggestions.criticalGaps && suggestions.criticalGaps.length > 0;
+
+    if (!hasMissingTests && !hasCriticalGaps) {
+      satSuccess('No missing tests identified!');
+      if (suggestions.coverageEstimate) {
+        satDim(`  Coverage estimate: ${suggestions.coverageEstimate}`);
+      }
+      return;
+    }
+
+    if (hasMissingTests) {
       satInfo(chalk.bold('Missing Tests:'));
+      suggestions.missingTests.forEach((test: any) => {
+        const priority = test.priority === 'high' ? chalk.red('HIGH') :
+          test.priority === 'medium' ? chalk.yellow('MED') : chalk.gray('LOW');
+        console.log(`\n  ${priority} ${chalk.white(test.function || 'unknown')}`);
+        satDim(`      ${test.scenario || 'No description'}`);
+        if (test.reason) {
+          satDim(`      Reason: ${test.reason}`);
+        }
+      });
+    }
 
-      if (suggestions.missingTests && suggestions.missingTests.length > 0) {
-        suggestions.missingTests.forEach((test: any) => {
-          const priority = test.priority === 'high' ? chalk.red('HIGH') :
-            test.priority === 'medium' ? chalk.yellow('MED') : chalk.gray('LOW');
-          console.log(`\n  ${priority} ${chalk.white(test.function)}`);
-          satDim(`      ${test.scenario}`);
-          if (test.reason) {
-            satDim(`      Reason: ${test.reason}`);
-          }
-        });
-      }
+    if (hasCriticalGaps) {
+      console.log('');
+      satWarn('Critical Gaps:');
+      suggestions.criticalGaps.forEach((gap: string) => {
+        satDim(`  • ${gap}`);
+      });
+    }
 
-      if (suggestions.criticalGaps && suggestions.criticalGaps.length > 0) {
-        console.log('');
-        satWarn('Critical Gaps:');
-        suggestions.criticalGaps.forEach((gap: string) => {
-          satDim(`  • ${gap}`);
-        });
-      }
+    if (suggestions.coverageEstimate) {
+      console.log('');
+      satDim(`Coverage estimate: ${suggestions.coverageEstimate}`);
     }
 
   } catch (error: any) {
