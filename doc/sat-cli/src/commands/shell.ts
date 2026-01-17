@@ -14,7 +14,7 @@ import {
   satError,
   satDim
 } from '../ui/logger';
-import { generateTestsWithAI, analyzeProjectWithAI, isGroqConfigured, suggestTestsWithAI } from '../ai/groq';
+import { generateTestsWithAI, analyzeProjectWithAI, isGroqConfigured, suggestTestsWithAI, reviewTestsWithAI, fixTestsWithAI } from '../ai/groq';
 import { loadConfig, saveApiKey, isValidApiKeyFormat } from '../config/settings';
 import {
   scanProject,
@@ -101,6 +101,14 @@ export async function startShell() {
           await handleSuggest(args.join(' '));
           break;
 
+        case 'review':
+          await handleReview(args.join(' '));
+          break;
+
+        case 'fix':
+          await handleFix(args.join(' '));
+          break;
+
         case 'status':
           await handleStatus();
           break;
@@ -149,6 +157,12 @@ ${chalk.cyan.bold('━━━ SAT Commands ━━━')}
 
   ${chalk.magenta.bold('suggest')} ${chalk.blue('<file>')}
     ${chalk.gray('Suggest missing test cases for a file')}
+
+  ${chalk.magenta.bold('review')} ${chalk.blue('<file>')}
+    ${chalk.gray('Review test quality and get improvement suggestions')}
+
+  ${chalk.magenta.bold('fix')} ${chalk.blue('<file>')}
+    ${chalk.gray('Auto-fix failing tests using AI')}
 
   ${chalk.magenta.bold('status')}
     ${chalk.gray('Show current project context and configuration')}
@@ -574,6 +588,220 @@ async function handleSuggest(filePath: string): Promise<void> {
 
   } catch (error: any) {
     spinner.fail('Analysis failed');
+    throw error;
+  }
+}
+
+/**
+ * Handle review command - review test quality
+ */
+async function handleReview(filePath: string): Promise<void> {
+  if (!filePath) {
+    satWarn('Usage: review <test-file>');
+    return;
+  }
+
+  const hasAI = await isGroqConfigured();
+  if (!hasAI) {
+    satError('GROQ API key required');
+    satInfo(`Run ${chalk.magenta('setup')} to configure your API key`);
+    return;
+  }
+
+  const fullPath = path.resolve(filePath);
+
+  if (!await fs.pathExists(fullPath)) {
+    satError(`File not found: ${filePath}`);
+    return;
+  }
+
+  const fileName = path.basename(fullPath);
+  if (!fileName.includes('.test.') && !fileName.includes('.spec.')) {
+    satWarn(`${fileName} doesn't appear to be a test file`);
+  }
+
+  const spinner = ora({
+    text: `Reviewing ${chalk.cyan(fileName)}...`,
+    color: 'cyan'
+  }).start();
+
+  try {
+    const testCode = await fs.readFile(fullPath, 'utf-8');
+
+    spinner.text = 'AI is analyzing test quality...';
+    const review = await reviewTestsWithAI(testCode);
+
+    spinner.succeed('Review complete');
+
+    if (review.parseError) {
+      console.log('\n' + review.raw);
+      return;
+    }
+
+    // Display formatted review
+    console.log('');
+
+    // Score with color
+    const score = review.score || 0;
+    const scoreColor = score >= 8 ? chalk.green : score >= 5 ? chalk.yellow : chalk.red;
+    console.log(`${chalk.bold('Quality Score:')} ${scoreColor.bold(score + '/10')}`);
+
+    // Strengths
+    if (review.strengths && review.strengths.length > 0) {
+      console.log('');
+      satSuccess('Strengths:');
+      review.strengths.forEach((s: string) => {
+        satDim(`  • ${s}`);
+      });
+    }
+
+    // Weaknesses
+    if (review.weaknesses && review.weaknesses.length > 0) {
+      console.log('');
+      satWarn('Weaknesses:');
+      review.weaknesses.forEach((w: string) => {
+        satDim(`  • ${w}`);
+      });
+    }
+
+    // Suggestions
+    if (review.suggestions && review.suggestions.length > 0) {
+      console.log('');
+      satInfo('Suggestions:');
+      review.suggestions.forEach((suggestion: any) => {
+        const priority = suggestion.priority === 'high' ? chalk.red('[HIGH]') :
+          suggestion.priority === 'medium' ? chalk.yellow('[MED]') : chalk.gray('[LOW]');
+        console.log(`  ${priority} ${chalk.white(suggestion.issue)}`);
+        if (suggestion.fix) {
+          satDim(`      Fix: ${suggestion.fix}`);
+        }
+      });
+    }
+
+    // Coverage assessment
+    if (review.coverageAssessment) {
+      console.log('');
+      satInfo('Coverage Assessment:');
+      satDim(`  ${review.coverageAssessment}`);
+    }
+
+    console.log('');
+    satDim(`Run ${chalk.magenta(`fix ${filePath}`)} to auto-fix issues`);
+
+  } catch (error: any) {
+    spinner.fail('Review failed');
+    throw error;
+  }
+}
+
+/**
+ * Handle fix command - auto-fix failing tests
+ */
+async function handleFix(filePath: string): Promise<void> {
+  if (!filePath) {
+    satWarn('Usage: fix <test-file>');
+    return;
+  }
+
+  const hasAI = await isGroqConfigured();
+  if (!hasAI) {
+    satError('GROQ API key required');
+    satInfo(`Run ${chalk.magenta('setup')} to configure your API key`);
+    return;
+  }
+
+  const fullPath = path.resolve(filePath);
+
+  if (!await fs.pathExists(fullPath)) {
+    satError(`File not found: ${filePath}`);
+    return;
+  }
+
+  const spinner = ora({
+    text: 'Analyzing test file...',
+    color: 'cyan'
+  }).start();
+
+  try {
+    const testCode = await fs.readFile(fullPath, 'utf-8');
+
+    // Try to run the test to get errors
+    spinner.text = 'Running test to detect errors...';
+    let errorMessage: string | undefined;
+
+    try {
+      const { execSync } = await import('child_process');
+      execSync(`npx jest "${fullPath}" --no-coverage 2>&1`, {
+        encoding: 'utf-8',
+        cwd: process.cwd(),
+        timeout: 60000,
+      });
+      spinner.succeed('Tests passed! No fix needed.');
+      return;
+    } catch (execError: any) {
+      errorMessage = execError.stdout || execError.stderr || execError.message;
+      if (errorMessage && errorMessage.length > 3000) {
+        errorMessage = errorMessage.slice(0, 3000) + '\n... [truncated]';
+      }
+    }
+
+    if (!errorMessage) {
+      spinner.fail('Could not detect test errors');
+      return;
+    }
+
+    // Try to find the source file
+    let sourceCode: string | undefined;
+    const testFileName = path.basename(fullPath);
+    const sourceFileName = testFileName
+      .replace('.test.ts', '.ts')
+      .replace('.test.tsx', '.tsx')
+      .replace('.test.js', '.js')
+      .replace('.test.jsx', '.jsx')
+      .replace('.spec.ts', '.ts')
+      .replace('.spec.tsx', '.tsx')
+      .replace('.spec.js', '.js')
+      .replace('.spec.jsx', '.jsx');
+
+    const testDir = path.dirname(fullPath);
+    const possibleSourcePaths = [
+      path.join(testDir, '..', sourceFileName),
+      path.join(testDir, sourceFileName),
+    ];
+
+    for (const sourcePath of possibleSourcePaths) {
+      if (await fs.pathExists(sourcePath)) {
+        sourceCode = await fs.readFile(sourcePath, 'utf-8');
+        spinner.text = `Found source: ${path.basename(sourcePath)}`;
+        break;
+      }
+    }
+
+    spinner.text = 'AI is fixing the tests...';
+    const fixedCode = await fixTestsWithAI(testCode, errorMessage, sourceCode);
+
+    // Clean up markdown if present
+    let cleanedCode = fixedCode;
+    if (cleanedCode.startsWith('```')) {
+      cleanedCode = cleanedCode
+        .replace(/^```(?:typescript|javascript|ts|js)?\n?/i, '')
+        .replace(/\n?```$/i, '');
+    }
+
+    // Backup original file
+    const backupPath = fullPath + '.backup';
+    await fs.copyFile(fullPath, backupPath);
+
+    // Write fixed code
+    await fs.writeFile(fullPath, cleanedCode);
+
+    spinner.succeed(`Fixed: ${chalk.cyan(filePath)}`);
+    satDim(`   Backup saved to: ${path.basename(backupPath)}`);
+    console.log('');
+    satInfo(`Run ${chalk.magenta('sat test')} to verify the fix`);
+
+  } catch (error: any) {
+    spinner.fail('Fix failed');
     throw error;
   }
 }

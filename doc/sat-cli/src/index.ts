@@ -16,6 +16,8 @@ import { genCommand } from './commands/gen';
 import { testCommand } from './commands/test';
 import { coverageCommand } from './commands/coverage';
 import { shellCommand } from './commands/shell';
+import { reviewCommand } from './commands/review';
+import { fixCommand } from './commands/fix';
 
 const program = new Command();
 
@@ -30,6 +32,8 @@ genCommand(program);
 testCommand(program);
 coverageCommand(program);
 shellCommand(program);
+reviewCommand(program);
+fixCommand(program);
 
 program.parse();
 
