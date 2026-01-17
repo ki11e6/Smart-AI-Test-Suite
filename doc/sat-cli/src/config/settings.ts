@@ -17,21 +17,30 @@ export interface ProjectConfig {
   framework: string;
   testDir: string;
   testFilePattern: string;
-  groqApiKey?: string;
+  // Note: API keys should NOT be stored in .satrc (use .env instead)
 }
 
 /**
  * Load configuration from multiple sources:
- * 1. Environment variables (highest priority)
- * 2. .satrc in current project directory
+ * 1. Environment variables (highest priority) - includes .env file via dotenv
+ * 2. .satrc in current project directory (for non-sensitive config)
  * 3. Default values
+ *
+ * SECURITY: API keys are ONLY loaded from environment variables (.env file),
+ * never from .satrc which may be committed to version control.
  */
 export async function loadConfig(): Promise<SATConfig> {
-  // Environment variables
+  // Load .env from current working directory (project-level)
+  const envPath = path.join(process.cwd(), '.env');
+  if (await fs.pathExists(envPath)) {
+    dotenv.config({ path: envPath });
+  }
+
+  // Environment variables (API key ONLY from env, never from .satrc)
   const envKey = process.env.GROQ_API_KEY;
   const envModel = process.env.SAT_MODEL;
 
-  // Project .satrc file
+  // Project .satrc file (non-sensitive config only)
   const satrcPath = path.join(process.cwd(), '.satrc');
   let fileConfig: Partial<ProjectConfig> = {};
 
@@ -56,7 +65,7 @@ export async function loadConfig(): Promise<SATConfig> {
   }
 
   return {
-    groqApiKey: envKey || fileConfig.groqApiKey,
+    groqApiKey: envKey,  // Only from environment, not from .satrc
     model: envModel || 'llama-3.3-70b-versatile',
     framework: fileConfig.framework || 'jest',
     testDir: fileConfig.testDir || '__tests__',
@@ -65,22 +74,69 @@ export async function loadConfig(): Promise<SATConfig> {
 }
 
 /**
- * Save API key to project's .satrc file
+ * Save API key to project's .env file (secure storage)
+ *
+ * SECURITY: API keys are stored in .env which should be gitignored,
+ * not in .satrc which may be committed to version control.
  */
 export async function saveApiKey(apiKey: string): Promise<void> {
-  const satrcPath = path.join(process.cwd(), '.satrc');
-  let config: Partial<ProjectConfig> = {};
+  const envPath = path.join(process.cwd(), '.env');
+  let envContent = '';
 
-  if (await fs.pathExists(satrcPath)) {
+  // Read existing .env content if it exists
+  if (await fs.pathExists(envPath)) {
     try {
-      config = await fs.readJson(satrcPath);
+      envContent = await fs.readFile(envPath, 'utf-8');
     } catch {
       // Start fresh if file is corrupted
     }
   }
 
-  config.groqApiKey = apiKey;
-  await fs.writeJson(satrcPath, config, { spaces: 2 });
+  // Update or add GROQ_API_KEY
+  const keyPattern = /^GROQ_API_KEY=.*/m;
+  const newKeyLine = `GROQ_API_KEY=${apiKey}`;
+
+  if (keyPattern.test(envContent)) {
+    // Replace existing key
+    envContent = envContent.replace(keyPattern, newKeyLine);
+  } else {
+    // Add new key (with newline if content exists)
+    if (envContent && !envContent.endsWith('\n')) {
+      envContent += '\n';
+    }
+    envContent += newKeyLine + '\n';
+  }
+
+  await fs.writeFile(envPath, envContent, 'utf-8');
+
+  // Ensure .env is in .gitignore
+  await ensureEnvInGitignore();
+}
+
+/**
+ * Ensure .env is listed in .gitignore for security
+ */
+async function ensureEnvInGitignore(): Promise<void> {
+  const gitignorePath = path.join(process.cwd(), '.gitignore');
+
+  try {
+    let content = '';
+    if (await fs.pathExists(gitignorePath)) {
+      content = await fs.readFile(gitignorePath, 'utf-8');
+    }
+
+    // Check if .env is already in .gitignore
+    if (!/^\.env$/m.test(content)) {
+      // Add .env to .gitignore
+      if (content && !content.endsWith('\n')) {
+        content += '\n';
+      }
+      content += '\n# Environment variables (contains secrets)\n.env\n';
+      await fs.writeFile(gitignorePath, content, 'utf-8');
+    }
+  } catch {
+    // Ignore errors - .gitignore update is best-effort
+  }
 }
 
 /**

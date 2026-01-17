@@ -127,6 +127,9 @@ export async function analyzeCode(filePath: string): Promise<CodeAnalysis | null
       }
 
       // Recursively traverse children
+      // Note: We don't propagate isInsideExport to children here because
+      // export context only applies to direct declarations, not nested content.
+      // The export declarations are handled explicitly above.
       for (const key in node) {
         if (key === 'parent' || key === 'range' || key === 'loc') continue;
         const child = node[key];

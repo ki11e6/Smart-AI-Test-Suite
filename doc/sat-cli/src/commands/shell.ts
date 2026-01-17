@@ -227,7 +227,8 @@ async function handleSetup(rl: readline.Interface): Promise<void> {
 
       try {
         await saveApiKey(key);
-        satSuccess('API key saved to .satrc');
+        satSuccess('API key saved to .env');
+        satDim('   (Added .env to .gitignore for security)');
         satInfo('You can now use AI-powered features!');
       } catch (error: any) {
         satError(`Failed to save: ${error.message}`);
@@ -872,12 +873,30 @@ async function handleFix(args: string[]): Promise<void> {
 
     } else {
       // Error-based fix mode (original behavior)
-      spinner.text = 'Running test to detect errors...';
+      // Get configured test framework
+      const config = await loadConfig();
+      const framework = config.framework || 'jest';
+
+      spinner.text = `Running test with ${framework} to detect errors...`;
       let errorMessage: string | undefined;
+
+      // Build framework-specific test command
+      let testCommand: string;
+      switch (framework) {
+        case 'vitest':
+          testCommand = `npx vitest run "${fullPath}" --reporter=verbose 2>&1`;
+          break;
+        case 'mocha':
+          testCommand = `npx mocha "${fullPath}" 2>&1`;
+          break;
+        case 'jest':
+        default:
+          testCommand = `npx jest "${fullPath}" --no-coverage 2>&1`;
+      }
 
       try {
         const { execSync } = await import('child_process');
-        execSync(`npx jest "${fullPath}" --no-coverage 2>&1`, {
+        execSync(testCommand, {
           encoding: 'utf-8',
           cwd: process.cwd(),
           timeout: 60000,

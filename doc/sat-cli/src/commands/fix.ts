@@ -5,6 +5,22 @@ import chalk from 'chalk';
 import ora from 'ora';
 import { execSync } from 'child_process';
 import { fixTestsWithAI, isGroqConfigured, reviewTestsWithAI, improveTestsWithAI } from '../ai/groq';
+import { loadConfig } from '../config/settings';
+
+/**
+ * Build test command based on configured framework
+ */
+function getTestCommand(framework: string, testFilePath: string): string {
+  switch (framework) {
+    case 'vitest':
+      return `npx vitest run "${testFilePath}" --reporter=verbose 2>&1`;
+    case 'mocha':
+      return `npx mocha "${testFilePath}" 2>&1`;
+    case 'jest':
+    default:
+      return `npx jest "${testFilePath}" --no-coverage 2>&1`;
+  }
+}
 
 export function fixCommand(program: Command) {
   program
@@ -123,9 +139,14 @@ export function fixCommand(program: Command) {
           let errorMessage = options.error;
 
           if (!errorMessage) {
-            spinner.text = 'Running test to detect errors...';
+            // Get configured test framework
+            const config = await loadConfig();
+            const framework = config.framework || 'jest';
+            const testCommand = getTestCommand(framework, testFilePath);
+
+            spinner.text = `Running test with ${framework} to detect errors...`;
             try {
-              execSync(`npx jest "${testFilePath}" --no-coverage 2>&1`, {
+              execSync(testCommand, {
                 encoding: 'utf-8',
                 cwd: process.cwd(),
                 timeout: 60000,
