@@ -10,6 +10,7 @@ import { ExitCode, type GenerationOptions, type CodebaseOptions, type ProviderTy
 import { formatError, getExitCode, InvalidArgsError } from './utils/errors.js';
 import { exists, isDirectory, isFile, isSourceFile, toRelativePath } from './utils/file.js';
 import { ProviderFactory, getProvider } from './providers/index.js';
+import { createOrchestrator, createAgentContext } from './agents/orchestrator.js';
 import {
   createCodebaseScanner,
   formatScanResult,
@@ -124,41 +125,77 @@ async function handleUnitCommand(
     );
   }
 
-  // Skip provider initialization for prompt-only mode
-  if (!options.promptOnly) {
-    // Initialize provider (validates availability)
-    const provider = await getProvider({
-      provider: options.provider,
-      model: options.model,
-      timeout: options.timeout,
-    });
-
-    reporter.verbose(`Configuration: ${JSON.stringify(options, null, 2)}`);
-    reporter.verbose(`Provider: ${provider.name}`);
-
-    if (options.format !== 'stdout') {
-      console.log(`[Smart Test] Using provider: ${provider.name}`);
-      console.log(`[Smart Test] Generating tests for: ${file}`);
-    }
-  } else {
-    // Prompt-only mode
+  // Handle prompt-only mode (no LLM call)
+  if (options.promptOnly) {
+    // TODO: Output constructed prompt using prompt builder
     if (options.format !== 'stdout') {
       console.log(`[Smart Test] Prompt-only mode for: ${file}`);
+      console.log('[Smart Test] Prompt output not yet implemented.');
     }
+    return;
   }
 
-  // TODO: Integrate with orchestrator
-  // For prompt-only mode, would output the constructed prompt here
-  // For stdout mode, would output only the test code
+  // Initialize provider
+  const provider = await getProvider({
+    provider: options.provider,
+    model: options.model,
+    timeout: options.timeout,
+  });
+
+  reporter.verbose(`Configuration: ${JSON.stringify(options, null, 2)}`);
+  reporter.verbose(`Provider: ${provider.name}`);
 
   if (options.format !== 'stdout') {
-    if (options.promptOnly) {
-      console.log('[Smart Test] Prompt-only mode: Would output constructed prompt here');
-      console.log('[Smart Test] Full implementation requires orchestrator integration.');
-    } else {
-      console.log('[Smart Test] Unit test generation not yet implemented.');
-      console.log('[Smart Test] Complete implementation coming in Epic 3.');
+    console.log(`[Smart Test] Using provider: ${provider.name}`);
+    console.log(`[Smart Test] Generating tests for: ${file}`);
+  }
+
+  // Create orchestrator with progress callback
+  const orchestrator = createOrchestrator({
+    onProgress: (update) => {
+      if (options.format !== 'stdout') {
+        reporter.report(update);
+      }
+    },
+  });
+
+  // Create agent context
+  const context = createAgentContext(provider, options, file);
+
+  // Execute the pipeline
+  const result = await orchestrator.execute({ file, options }, context);
+
+  if (!result.success) {
+    throw new Error(result.error?.message || 'Test generation failed');
+  }
+
+  // Handle output based on format
+  if (options.format === 'stdout') {
+    // Output only the test code for piping
+    console.log(result.data!.testCode);
+  } else if (options.format === 'json') {
+    // Output JSON for programmatic consumption
+    console.log(JSON.stringify({
+      sourceFile: file,
+      testFile: result.data!.testFile,
+      testCount: result.data!.testCount,
+      edgeCases: result.data!.edgeCases,
+      validationPassed: result.data!.validationPassed,
+      healingAttempts: result.data!.healingAttempts,
+      metrics: result.data!.metrics,
+    }, null, 2));
+  } else {
+    // Normal file output mode
+    console.log('');
+    console.log(`[Smart Test] Tests written to: ${result.data!.testFile}`);
+    console.log(`[Smart Test] Generated ${result.data!.testCount} test(s)`);
+    console.log(`[Smart Test] Edge cases covered: ${result.data!.edgeCases.join(', ') || 'none'}`);
+
+    if (result.data!.healingAttempts) {
+      console.log(`[Smart Test] Self-healing attempts: ${result.data!.healingAttempts}`);
     }
+
+    console.log(`[Smart Test] Duration: ${result.data!.metrics.totalDuration}ms`);
   }
 }
 
