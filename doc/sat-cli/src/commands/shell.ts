@@ -14,7 +14,7 @@ import {
   satError,
   satDim
 } from '../ui/logger';
-import { generateTestsWithAI, analyzeProjectWithAI, isGroqConfigured, suggestTestsWithAI, reviewTestsWithAI, fixTestsWithAI } from '../ai/groq';
+import { generateTestsWithAI, analyzeProjectWithAI, isGroqConfigured, suggestTestsWithAI, reviewTestsWithAI, fixTestsWithAI, improveTestsWithAI } from '../ai/groq';
 import { loadConfig, saveApiKey, isValidApiKeyFormat } from '../config/settings';
 import {
   scanProject,
@@ -106,7 +106,7 @@ export async function startShell() {
           break;
 
         case 'fix':
-          await handleFix(args.join(' '));
+          await handleFix(args);
           break;
 
         case 'test':
@@ -169,8 +169,9 @@ ${chalk.cyan.bold('━━━ SAT Commands ━━━')}
   ${chalk.magenta.bold('review')} ${chalk.blue('<file>')}
     ${chalk.gray('Review test quality and get improvement suggestions')}
 
-  ${chalk.magenta.bold('fix')} ${chalk.blue('<file>')}
-    ${chalk.gray('Auto-fix failing tests using AI')}
+  ${chalk.magenta.bold('fix')} ${chalk.blue('<file>')} ${chalk.gray('[--review]')}
+    ${chalk.gray('Auto-fix failing tests or improve based on review')}
+    ${chalk.gray('Use --review (-r) to fix based on quality review')}
 
   ${chalk.magenta.bold('test')} ${chalk.blue('[options]')}
     ${chalk.gray('Run tests using configured framework')}
@@ -764,11 +765,16 @@ async function handleReview(filePath: string): Promise<void> {
 }
 
 /**
- * Handle fix command - auto-fix failing tests
+ * Handle fix command - auto-fix failing tests or improve based on review
  */
-async function handleFix(filePath: string): Promise<void> {
+async function handleFix(args: string[]): Promise<void> {
+  // Parse arguments
+  const reviewMode = args.includes('--review') || args.includes('-r');
+  const filePath = args.filter(a => !a.startsWith('-')).join(' ');
+
   if (!filePath) {
-    satWarn('Usage: fix <test-file>');
+    satWarn('Usage: fix <test-file> [--review]');
+    satDim('  --review, -r  Fix based on quality review instead of test errors');
     return;
   }
 
@@ -794,32 +800,7 @@ async function handleFix(filePath: string): Promise<void> {
   try {
     const testCode = await fs.readFile(fullPath, 'utf-8');
 
-    // Try to run the test to get errors
-    spinner.text = 'Running test to detect errors...';
-    let errorMessage: string | undefined;
-
-    try {
-      const { execSync } = await import('child_process');
-      execSync(`npx jest "${fullPath}" --no-coverage 2>&1`, {
-        encoding: 'utf-8',
-        cwd: process.cwd(),
-        timeout: 60000,
-      });
-      spinner.succeed('Tests passed! No fix needed.');
-      return;
-    } catch (execError: any) {
-      errorMessage = execError.stdout || execError.stderr || execError.message;
-      if (errorMessage && errorMessage.length > 3000) {
-        errorMessage = errorMessage.slice(0, 3000) + '\n... [truncated]';
-      }
-    }
-
-    if (!errorMessage) {
-      spinner.fail('Could not detect test errors');
-      return;
-    }
-
-    // Try to find the source file
+    // Try to find the source file (used by both modes)
     let sourceCode: string | undefined;
     const testFileName = path.basename(fullPath);
     const sourceFileName = testFileName
@@ -846,8 +827,80 @@ async function handleFix(filePath: string): Promise<void> {
       }
     }
 
-    spinner.text = 'AI is fixing the tests...';
-    const fixedCode = await fixTestsWithAI(testCode, errorMessage, sourceCode);
+    let fixedCode: string;
+
+    if (reviewMode) {
+      // Review-based improvement mode
+      spinner.text = 'Reviewing test quality...';
+      const review = await reviewTestsWithAI(testCode);
+
+      if (review.parseError) {
+        spinner.fail('Could not parse review response');
+        console.log(review.raw);
+        return;
+      }
+
+      // Display review summary
+      spinner.succeed('Review complete');
+      const score = review.score || 0;
+      const scoreColor = score >= 8 ? chalk.green : score >= 5 ? chalk.yellow : chalk.red;
+      console.log(`\n${chalk.bold('Quality Score:')} ${scoreColor.bold(score + '/10')}`);
+
+      if (review.weaknesses && review.weaknesses.length > 0) {
+        console.log(chalk.red.bold('\nWeaknesses:'));
+        review.weaknesses.forEach((w: string) => console.log(chalk.red(`  • ${w}`)));
+      }
+
+      if (review.suggestions && review.suggestions.length > 0) {
+        console.log(chalk.cyan.bold('\nSuggestions to apply:'));
+        review.suggestions.forEach((s: any) => {
+          const priority = s.priority === 'high' ? chalk.red('[HIGH]') :
+            s.priority === 'medium' ? chalk.yellow('[MED]') : chalk.gray('[LOW]');
+          console.log(`  ${priority} ${s.issue}`);
+        });
+      }
+
+      if ((!review.weaknesses || review.weaknesses.length === 0) &&
+          (!review.suggestions || review.suggestions.length === 0)) {
+        console.log(chalk.green('\nNo issues to fix!'));
+        return;
+      }
+
+      console.log('');
+      spinner.start('AI is improving the tests...');
+      fixedCode = await improveTestsWithAI(testCode, review, sourceCode);
+
+    } else {
+      // Error-based fix mode (original behavior)
+      spinner.text = 'Running test to detect errors...';
+      let errorMessage: string | undefined;
+
+      try {
+        const { execSync } = await import('child_process');
+        execSync(`npx jest "${fullPath}" --no-coverage 2>&1`, {
+          encoding: 'utf-8',
+          cwd: process.cwd(),
+          timeout: 60000,
+        });
+        spinner.succeed('Tests passed!');
+        satDim('Use --review flag to improve test quality based on review.');
+        return;
+      } catch (execError: any) {
+        errorMessage = execError.stdout || execError.stderr || execError.message;
+        if (errorMessage && errorMessage.length > 3000) {
+          errorMessage = errorMessage.slice(0, 3000) + '\n... [truncated]';
+        }
+      }
+
+      if (!errorMessage) {
+        spinner.fail('Could not detect test errors');
+        satDim('Use --review flag to improve test quality based on review.');
+        return;
+      }
+
+      spinner.text = 'AI is fixing the tests...';
+      fixedCode = await fixTestsWithAI(testCode, errorMessage, sourceCode);
+    }
 
     // Clean up markdown if present
     let cleanedCode = fixedCode;

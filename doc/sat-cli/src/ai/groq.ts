@@ -163,18 +163,41 @@ Generate comprehensive tests for this code. Use import path "${importPath}" exac
 }
 
 /**
+ * Clean JSON response from markdown code blocks
+ */
+function cleanJsonResponse(response: string): string {
+  let cleaned = response.trim();
+
+  // Remove markdown code blocks
+  if (cleaned.startsWith('```')) {
+    cleaned = cleaned
+      .replace(/^```(?:json)?\n?/i, '')
+      .replace(/\n?```\s*$/i, '');
+  }
+
+  return cleaned.trim();
+}
+
+/**
+ * Parse AI response as JSON with markdown handling
+ */
+function parseJsonResponse(response: string): any {
+  const cleaned = cleanJsonResponse(response);
+
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    // If still can't parse, return as raw
+    return { raw: response, parseError: true };
+  }
+}
+
+/**
  * Analyze a project structure using AI
  */
 export async function analyzeProjectWithAI(projectInfo: string): Promise<any> {
   const result = await runAgent('analyzer', projectInfo);
-
-  try {
-    // Try to parse as JSON
-    return JSON.parse(result);
-  } catch {
-    // If not valid JSON, return as raw analysis
-    return { raw: result, parseError: true };
-  }
+  return parseJsonResponse(result);
 }
 
 /**
@@ -191,12 +214,7 @@ export async function suggestTestsWithAI(
   }
 
   const result = await runAgent('suggester', prompt);
-
-  try {
-    return JSON.parse(result);
-  } catch {
-    return { raw: result, parseError: true };
-  }
+  return parseJsonResponse(result);
 }
 
 /**
@@ -204,16 +222,11 @@ export async function suggestTestsWithAI(
  */
 export async function reviewTestsWithAI(testCode: string): Promise<any> {
   const result = await runAgent('reviewer', testCode);
-
-  try {
-    return JSON.parse(result);
-  } catch {
-    return { raw: result, parseError: true };
-  }
+  return parseJsonResponse(result);
 }
 
 /**
- * Fix failing tests
+ * Fix failing tests based on error messages
  */
 export async function fixTestsWithAI(
   testCode: string,
@@ -224,6 +237,49 @@ export async function fixTestsWithAI(
 
   if (sourceCode) {
     prompt += `\n\nOriginal Source:\n\`\`\`\n${sourceCode}\n\`\`\``;
+  }
+
+  return runAgent('fixer', prompt);
+}
+
+/**
+ * Improve tests based on review suggestions
+ */
+export async function improveTestsWithAI(
+  testCode: string,
+  review: {
+    score?: number;
+    weaknesses?: string[];
+    suggestions?: Array<{ issue: string; fix: string; priority: string }>;
+  },
+  sourceCode?: string
+): Promise<string> {
+  // Build improvement prompt from review
+  let issuesList = '';
+
+  if (review.weaknesses && review.weaknesses.length > 0) {
+    issuesList += 'Weaknesses to address:\n';
+    review.weaknesses.forEach((w, i) => {
+      issuesList += `${i + 1}. ${w}\n`;
+    });
+  }
+
+  if (review.suggestions && review.suggestions.length > 0) {
+    issuesList += '\nSuggestions to implement:\n';
+    review.suggestions.forEach((s, i) => {
+      issuesList += `${i + 1}. [${s.priority.toUpperCase()}] ${s.issue}\n   Fix: ${s.fix}\n`;
+    });
+  }
+
+  let prompt = `Test Code:\n\`\`\`\n${testCode}\n\`\`\`
+
+Review Issues to Fix:
+${issuesList}
+
+Improve the test code by addressing all the issues above. Focus on high priority issues first.`;
+
+  if (sourceCode) {
+    prompt += `\n\nOriginal Source Code:\n\`\`\`\n${sourceCode}\n\`\`\``;
   }
 
   return runAgent('fixer', prompt);
