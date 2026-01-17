@@ -75,34 +75,43 @@ Rules:
 
 Your task is to generate comprehensive, production-quality tests for the provided code.
 
+CRITICAL IMPORT RULES:
+1. Import the source module using EXACTLY this path: {importPath}
+2. Framework-specific imports:
+   - Jest: Do NOT import describe/it/expect (they are globals). Just import the source.
+   - Vitest: import { describe, it, expect } from 'vitest';
+   - Mocha + Chai: import { expect } from 'chai';
+
+EXAMPLE for {framework}:
+{importExample}
+
 REQUIREMENTS:
 1. Test ALL exported functions, classes, and methods
 2. Include these test categories:
    - Happy path tests (normal inputs)
    - Edge cases (empty, null, undefined, boundary values)
    - Error handling (invalid inputs, exceptions)
-   - Type validation (if TypeScript)
 
 3. Follow these patterns:
    - Use descriptive test names: "should [expected behavior] when [condition]"
    - AAA pattern: Arrange, Act, Assert
    - One assertion focus per test (when practical)
-   - Mock external dependencies
+   - Mock external dependencies with jest.mock() or vi.mock()
 
 4. Code style:
-   - Use {framework} syntax and best practices
-   - Include proper imports
-   - Add beforeEach/afterEach for setup/cleanup if needed
    - Group related tests in describe blocks
+   - Add beforeEach/afterEach for setup/cleanup if needed
+   - Use async/await for async functions
 
 PROJECT CONTEXT:
 {projectContext}
 
 OUTPUT RULES:
-- Return ONLY valid TypeScript/JavaScript test code
-- NO markdown code blocks, NO explanations
-- Include all necessary imports at the top
-- The code must be immediately runnable`
+- Return ONLY valid TypeScript test code
+- NO markdown code blocks (no \`\`\`), NO explanations, NO comments like "// Test file for..."
+- Start directly with import statements
+- The code must compile without TypeScript errors
+- Use the EXACT import path provided: {importPath}`
   },
 
   /**
@@ -192,19 +201,34 @@ Return ONLY valid JSON.`
 
 Given a test file and error information, fix the issues and return working test code.
 
-Common issues to fix:
-- Import errors (wrong paths, missing imports)
-- Assertion errors (wrong expected values)
-- Async/await issues
-- Mock configuration problems
-- Type errors
+COMMON ISSUES TO FIX:
+1. Import errors:
+   - Wrong relative paths (e.g., '../src/file' should be '../file')
+   - Missing imports from source file
+   - Jest: Remove 'import { describe, it, expect } from "@jest/globals"' - these are globals
+   - Vitest: Use 'import { describe, it, expect } from "vitest"'
 
-Rules:
+2. Type errors:
+   - Missing type annotations
+   - Wrong parameter types in function calls
+   - Async functions not awaited
+
+3. Assertion errors:
+   - Wrong expected values
+   - Using .toBe() for objects (should use .toEqual())
+   - Missing .resolves/.rejects for promises
+
+4. Mock issues:
+   - jest.mock() path doesn't match import path
+   - Mock not returning expected shape
+
+RULES:
 - Return ONLY the fixed test code
-- NO explanations or markdown
+- NO markdown code blocks (no \`\`\`)
+- NO explanations before or after the code
+- Start directly with import statements
 - Preserve the original test structure when possible
-- Add comments only if the fix is non-obvious
-- Ensure all imports are correct`
+- Ensure all imports use correct relative paths`
   }
 };
 

@@ -2,10 +2,62 @@ import * as fs from 'fs-extra';
 import * as path from 'path';
 import { CodeAnalysis } from './analyzer';
 
+export type TestFramework = 'jest' | 'vitest' | 'mocha';
+
+/**
+ * Get framework-specific imports for test files
+ */
+export function getFrameworkImports(framework: TestFramework): string {
+  switch (framework) {
+    case 'vitest':
+      return "import { describe, it, expect, beforeEach, afterEach } from 'vitest';";
+    case 'mocha':
+      return "import { expect } from 'chai';";
+    case 'jest':
+    default:
+      // Jest globals are auto-available, no import needed
+      return '';
+  }
+}
+
+/**
+ * Get framework-specific import example for AI prompts
+ */
+export function getFrameworkImportExample(framework: TestFramework, importPath: string, exports: string[]): string {
+  const exportsStr = exports.length > 0 ? exports.join(', ') : 'myFunction';
+
+  switch (framework) {
+    case 'vitest':
+      return `import { describe, it, expect } from 'vitest';
+import { ${exportsStr} } from '${importPath}';`;
+    case 'mocha':
+      return `import { expect } from 'chai';
+import { ${exportsStr} } from '${importPath}';`;
+    case 'jest':
+    default:
+      return `// Jest globals (describe, it, expect) are auto-available
+import { ${exportsStr} } from '${importPath}';`;
+  }
+}
+
+/**
+ * Calculate the relative import path from test file to source file
+ */
+export function calculateImportPath(sourceFilePath: string, testFilePath: string): string {
+  const testFileDir = path.dirname(testFilePath);
+  const relativePath = path.relative(testFileDir, sourceFilePath)
+    .replace(/\\/g, '/')
+    .replace(/\.tsx?$/, '')
+    .replace(/\.jsx?$/, '');
+
+  return relativePath.startsWith('.') ? relativePath : `./${relativePath}`;
+}
+
 export async function generateTest(
   sourceFilePath: string,
   analysis: CodeAnalysis,
-  outputDir: string
+  outputDir: string,
+  framework: TestFramework = 'jest'
 ): Promise<string> {
   const sourceFileName = path.basename(sourceFilePath, path.extname(sourceFilePath));
   const testFileName = `${sourceFileName}.test.ts`;
@@ -16,7 +68,7 @@ export async function generateTest(
   await fs.ensureDir(testDir);
 
   // Generate test content
-  const testContent = generateTestContent(sourceFilePath, testFilePath, analysis);
+  const testContent = generateTestContent(sourceFilePath, testFilePath, analysis, framework);
 
   // Write test file
   await fs.writeFile(testFilePath, testContent, 'utf-8');
@@ -24,15 +76,14 @@ export async function generateTest(
   return testFilePath;
 }
 
-function generateTestContent(sourceFilePath: string, testFilePath: string, analysis: CodeAnalysis): string {
-  // Calculate relative path from test file location to source file
-  const testFileDir = path.dirname(testFilePath);
-  const relativePath = path.relative(testFileDir, sourceFilePath)
-    .replace(/\\/g, '/')
-    .replace(/\.ts$/, '')
-    .replace(/\.js$/, '');
-
-  const importPath = relativePath.startsWith('.') ? relativePath : `./${relativePath}`;
+function generateTestContent(
+  sourceFilePath: string,
+  testFilePath: string,
+  analysis: CodeAnalysis,
+  framework: TestFramework
+): string {
+  const importPath = calculateImportPath(sourceFilePath, testFilePath);
+  const frameworkImports = getFrameworkImports(framework);
   
   let imports = '';
   let testCases = '';
@@ -70,12 +121,21 @@ function generateTestContent(sourceFilePath: string, testFilePath: string, analy
 });`;
   }
 
-  return `import { describe, it, expect } from '@jest/globals';
+  // Build the final test file content
+  const parts: string[] = [];
 
-${imports}
+  // Add framework-specific imports if needed
+  if (frameworkImports) {
+    parts.push(frameworkImports);
+  }
 
-${testCases}
-`;
+  // Add source imports
+  parts.push(imports);
+
+  // Add test cases
+  parts.push(testCases);
+
+  return parts.join('\n\n') + '\n';
 }
 
 function generateFunctionTests(func: { name: string; parameters: string[] }): string {

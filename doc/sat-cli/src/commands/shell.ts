@@ -372,6 +372,44 @@ async function handleGenerate(args: string): Promise<void> {
 }
 
 /**
+ * Calculate import path from test file to source file
+ */
+function calculateImportPath(sourceFilePath: string, testFilePath: string): string {
+  const testFileDir = path.dirname(testFilePath);
+  const relativePath = path.relative(testFileDir, sourceFilePath)
+    .replace(/\\/g, '/')
+    .replace(/\.tsx?$/, '')
+    .replace(/\.jsx?$/, '');
+
+  return relativePath.startsWith('.') ? relativePath : `./${relativePath}`;
+}
+
+/**
+ * Clean up AI-generated code (remove markdown, fix common issues)
+ */
+function cleanGeneratedCode(code: string): string {
+  let cleaned = code.trim();
+
+  // Remove markdown code blocks
+  if (cleaned.startsWith('```')) {
+    cleaned = cleaned
+      .replace(/^```(?:typescript|javascript|ts|js)?\n?/i, '')
+      .replace(/\n?```\s*$/i, '');
+  }
+
+  // Remove any leading comments like "// Test file for..."
+  cleaned = cleaned.replace(/^\/\/.*\n/gm, '').trim();
+
+  // Fix common import issues - remove @jest/globals import
+  cleaned = cleaned.replace(/import\s*{\s*describe\s*,\s*it\s*,\s*expect\s*(?:,\s*beforeEach\s*)?(?:,\s*afterEach\s*)?\s*}\s*from\s*['"]@jest\/globals['"];\n?/g, '');
+
+  // Ensure there's no duplicate blank lines
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+
+  return cleaned.trim() + '\n';
+}
+
+/**
  * Generate tests for a single file
  */
 async function generateSingleFile(filePath: string): Promise<void> {
@@ -394,6 +432,22 @@ async function generateSingleFile(filePath: string): Promise<void> {
     // Get static analysis for context
     const analysis = await analyzeCode(fullPath);
 
+    // Determine output path FIRST so we can calculate import path
+    const testDir = path.join(path.dirname(fullPath), '__tests__');
+    const sourceFileName = path.basename(fullPath);
+    const testFileName = sourceFileName.replace(/\.(ts|tsx|js|jsx)$/, '.test.ts');
+    const testFilePath = path.join(testDir, testFileName);
+
+    // Calculate import path from test file to source file
+    const importPath = calculateImportPath(fullPath, testFilePath);
+
+    // Extract exports from analysis
+    const exports: string[] = [];
+    if (analysis) {
+      exports.push(...analysis.functions.filter(f => f.isExported).map(f => f.name));
+      exports.push(...analysis.classes.map(c => c.name));
+    }
+
     spinner.text = 'AI is generating tests...';
 
     // Generate with AI
@@ -401,21 +455,12 @@ async function generateSingleFile(filePath: string): Promise<void> {
       framework: projectContext?.testingSetup.framework || 'jest',
       projectContext: projectContext ? buildContextSummary(projectContext) : '[]',
       fileName: path.basename(filePath),
+      importPath,
+      exports,
     });
 
-    // Clean up the response (remove markdown if present)
-    let cleanedCode = testCode;
-    if (cleanedCode.startsWith('```')) {
-      cleanedCode = cleanedCode
-        .replace(/^```(?:typescript|javascript|ts|js)?\n?/i, '')
-        .replace(/\n?```$/i, '');
-    }
-
-    // Determine output path
-    const testDir = path.join(path.dirname(fullPath), '__tests__');
-    const sourceFileName = path.basename(fullPath);
-    const testFileName = sourceFileName.replace(/\.(ts|tsx|js|jsx)$/, '.test.ts');
-    const testFilePath = path.join(testDir, testFileName);
+    // Clean up the response
+    const cleanedCode = cleanGeneratedCode(testCode);
 
     // Ensure test directory exists
     await fs.ensureDir(testDir);
@@ -431,6 +476,7 @@ async function generateSingleFile(filePath: string): Promise<void> {
       const classCount = analysis.classes.length;
       satDim(`   Covered: ${funcCount} functions, ${classCount} classes`);
     }
+    satDim(`   Import path: ${importPath}`);
 
   } catch (error: any) {
     spinner.fail('Generation failed');
@@ -487,23 +533,30 @@ async function generateAll(): Promise<void> {
           continue;
         }
 
+        // Determine test file path
+        const testDir = path.join(path.dirname(fullPath), '__tests__');
+        const testFileName = path.basename(file).replace(/\.(ts|tsx|js|jsx)$/, '.test.ts');
+        const testFilePath = path.join(testDir, testFileName);
+
+        // Calculate import path and get exports
+        const importPath = calculateImportPath(fullPath, testFilePath);
+        const analysis = await analyzeCode(fullPath);
+        const exports: string[] = [];
+        if (analysis) {
+          exports.push(...analysis.functions.filter(f => f.isExported).map(f => f.name));
+          exports.push(...analysis.classes.map(c => c.name));
+        }
+
         const testCode = await generateTestsWithAI(sourceCode, {
           framework: projectContext?.testingSetup.framework || 'jest',
           projectContext: projectContext ? buildContextSummary(projectContext) : '[]',
           fileName: path.basename(file),
+          importPath,
+          exports,
         });
 
-        // Clean markdown
-        let cleanedCode = testCode;
-        if (cleanedCode.startsWith('```')) {
-          cleanedCode = cleanedCode
-            .replace(/^```(?:typescript|javascript|ts|js)?\n?/i, '')
-            .replace(/\n?```$/i, '');
-        }
-
-        const testDir = path.join(path.dirname(fullPath), '__tests__');
-        const testFileName = path.basename(file).replace(/\.(ts|tsx|js|jsx)$/, '.test.ts');
-        const testFilePath = path.join(testDir, testFileName);
+        // Clean generated code
+        const cleanedCode = cleanGeneratedCode(testCode);
 
         await fs.ensureDir(testDir);
         await fs.writeFile(testFilePath, cleanedCode);

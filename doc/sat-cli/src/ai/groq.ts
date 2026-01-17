@@ -85,6 +85,44 @@ export async function runAgent(
 }
 
 /**
+ * Generate framework-specific import example
+ */
+function buildImportExample(framework: string, importPath: string, exports: string[]): string {
+  const exportsStr = exports.length > 0 ? exports.join(', ') : 'myFunction';
+
+  switch (framework) {
+    case 'vitest':
+      return `import { describe, it, expect } from 'vitest';
+import { ${exportsStr} } from '${importPath}';
+
+describe('${exports[0] || 'myFunction'}', () => {
+  it('should work', () => {
+    expect(${exports[0] || 'myFunction'}).toBeDefined();
+  });
+});`;
+    case 'mocha':
+      return `import { expect } from 'chai';
+import { ${exportsStr} } from '${importPath}';
+
+describe('${exports[0] || 'myFunction'}', () => {
+  it('should work', () => {
+    expect(${exports[0] || 'myFunction'}).to.exist;
+  });
+});`;
+    case 'jest':
+    default:
+      return `// Jest: describe, it, expect are globals - do NOT import them
+import { ${exportsStr} } from '${importPath}';
+
+describe('${exports[0] || 'myFunction'}', () => {
+  it('should work', () => {
+    expect(${exports[0] || 'myFunction'}).toBeDefined();
+  });
+});`;
+  }
+}
+
+/**
  * Generate tests for a source file using AI
  */
 export async function generateTestsWithAI(
@@ -93,23 +131,34 @@ export async function generateTestsWithAI(
     framework?: string;
     projectContext?: string;
     fileName?: string;
+    importPath?: string;
+    exports?: string[];
   } = {}
 ): Promise<string> {
-  const { framework = 'jest', projectContext = '[]', fileName = 'unknown' } = options;
+  const {
+    framework = 'jest',
+    projectContext = '[]',
+    fileName = 'unknown',
+    importPath = '../unknown',
+    exports = []
+  } = options;
+
+  const importExample = buildImportExample(framework, importPath, exports);
 
   const userPrompt = `
 File: ${fileName}
+Import path from test file to source: ${importPath}
 
 Source Code:
-\`\`\`typescript
 ${sourceCode}
-\`\`\`
 
-Generate comprehensive tests for this code.`;
+Generate comprehensive tests for this code. Use import path "${importPath}" exactly.`;
 
   return runAgent('generator', userPrompt, {
     framework,
     projectContext,
+    importPath,
+    importExample,
   });
 }
 
