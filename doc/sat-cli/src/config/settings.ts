@@ -5,10 +5,43 @@ import dotenv from 'dotenv';
 // Load .env from CLI tool directory (for development)
 dotenv.config({ path: path.join(__dirname, '../../.env') });
 
+/** Supported test frameworks */
+export const SUPPORTED_FRAMEWORKS = ['jest', 'vitest', 'mocha'] as const;
+export type TestFramework = typeof SUPPORTED_FRAMEWORKS[number];
+
+/**
+ * Check if a value is a valid test framework
+ */
+export function isValidFramework(framework: string): framework is TestFramework {
+  return SUPPORTED_FRAMEWORKS.includes(framework as TestFramework);
+}
+
+/**
+ * Validate and normalize framework value
+ * Returns the framework if valid, or 'jest' as default with a warning
+ */
+function validateFramework(framework: string | undefined): TestFramework {
+  if (!framework) {
+    return 'jest';
+  }
+
+  const normalized = framework.toLowerCase().trim();
+
+  if (isValidFramework(normalized)) {
+    return normalized;
+  }
+
+  console.warn(
+    `Warning: Invalid framework "${framework}" in .satrc. ` +
+    `Supported: ${SUPPORTED_FRAMEWORKS.join(', ')}. Using 'jest' as default.`
+  );
+  return 'jest';
+}
+
 export interface SATConfig {
   groqApiKey?: string;
   model: string;
-  framework: string;
+  framework: TestFramework;
   testDir: string;
   projectName?: string;
 }
@@ -67,7 +100,7 @@ export async function loadConfig(): Promise<SATConfig> {
   return {
     groqApiKey: envKey,  // Only from environment, not from .satrc
     model: envModel || 'llama-3.3-70b-versatile',
-    framework: fileConfig.framework || 'jest',
+    framework: validateFramework(fileConfig.framework),
     testDir: fileConfig.testDir || '__tests__',
     projectName,
   };

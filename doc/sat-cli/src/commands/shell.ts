@@ -24,6 +24,7 @@ import {
   ProjectContext
 } from '../core/project-scanner';
 import { analyzeCode } from '../core/analyzer';
+import { calculateImportPath } from '../core/generator';
 
 // In-memory project context (session-scoped cache)
 let projectContext: ProjectContext | null = null;
@@ -331,7 +332,7 @@ ${projectContext.files.slice(0, 15).map(f =>
             projectContext.patterns = { ...projectContext.patterns, ...aiAnalysis.patterns };
           }
           if (aiAnalysis.recommendations) {
-            (projectContext as any).aiRecommendations = aiAnalysis.recommendations;
+            projectContext.aiRecommendations = aiAnalysis.recommendations;
           }
         }
       } catch (aiError) {
@@ -362,10 +363,10 @@ ${projectContext.files.slice(0, 15).map(f =>
     console.log('');
     satDim(`Context saved to: ${contextPath}`);
 
-    if ((projectContext as any).aiRecommendations) {
+    if (projectContext.aiRecommendations && projectContext.aiRecommendations.length > 0) {
       console.log('');
       satInfo(chalk.bold('AI Recommendations:'));
-      (projectContext as any).aiRecommendations.forEach((rec: string) => {
+      projectContext.aiRecommendations.forEach((rec) => {
         satDim(`  • ${rec}`);
       });
     }
@@ -410,19 +411,6 @@ async function handleGenerate(args: string): Promise<void> {
   }
 
   await generateSingleFile(args);
-}
-
-/**
- * Calculate import path from test file to source file
- */
-function calculateImportPath(sourceFilePath: string, testFilePath: string): string {
-  const testFileDir = path.dirname(testFilePath);
-  const relativePath = path.relative(testFileDir, sourceFilePath)
-    .replace(/\\/g, '/')
-    .replace(/\.tsx?$/, '')
-    .replace(/\.jsx?$/, '');
-
-  return relativePath.startsWith('.') ? relativePath : `./${relativePath}`;
 }
 
 /**
@@ -986,8 +974,9 @@ async function handleFix(args: string[]): Promise<void> {
         .replace(/\n?```$/i, '');
     }
 
-    // Backup original file
-    const backupPath = fullPath + '.backup';
+    // Backup original file with timestamp to preserve history
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const backupPath = fullPath.replace(/(\.[^.]+)$/, `.backup-${timestamp}$1`);
     await fs.copyFile(fullPath, backupPath);
 
     // Write fixed code

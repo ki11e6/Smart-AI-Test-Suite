@@ -37,6 +37,8 @@ export interface ProjectContext {
   dependencies: string[];
   devDependencies: string[];
   scannedAt: string;
+  /** AI-generated recommendations for the project (optional) */
+  aiRecommendations?: string[];
 }
 
 /**

@@ -193,8 +193,9 @@ export function fixCommand(program: Command) {
           return;
         }
 
-        // Backup original file
-        const backupPath = testFilePath + '.backup';
+        // Backup original file with timestamp to preserve history
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const backupPath = testFilePath.replace(/(\.[^.]+)$/, `.backup-${timestamp}$1`);
         await fs.copyFile(testFilePath, backupPath);
 
         // Write fixed code
